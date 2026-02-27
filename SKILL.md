@@ -55,10 +55,16 @@ See: `references/setup-and-preconditions.md`
 ./scripts/task-loop.sh --auto
 ```
 
+For unattended runs, keep verify guards explicit:
+
+```bash
+./scripts/task-loop.sh --auto --verify-idle-timeout 300 --verify-timeout 5400
+```
+
 5. For unattended execution, run watchdog.
 
 ```bash
-./scripts/task-loop-watchdog.sh --interval 20
+./scripts/task-loop-watchdog.sh --daemon --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300" --loop-arg "--verify-timeout" --loop-arg "5400"
 ```
 
 ## Bundled Scripts
@@ -87,6 +93,7 @@ Use when loop behavior deviates; contains known incidents, fixes, and prevention
 
 - Do not bypass `task-loop.sh` for normal execution.
 - Keep verify gate enabled before marking tasks done.
+- Ensure repo scripts expose `npm run validate` and `npm run verify` (where `verify` runs `validate`).
 - Keep one commit per completed task (`task(<id>): complete`).
 - If verify fails, stop and report; do not force task completion.
 - Use resume behavior after interruptions unless user explicitly requests otherwise.

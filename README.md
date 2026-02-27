@@ -157,7 +157,8 @@ Add to `package.json`:
 ```json
 {
   "scripts": {
-    "verify": "npm run test && npm run lint",
+    "validate": "npm run lint && npm run test && npm run build",
+    "verify": "npm run validate",
     "test": "vitest run",
     "lint": "eslint ."
   }
@@ -239,6 +240,12 @@ This creates task files in `.taskmaster/tasks/`.
 ./scripts/task-loop.sh --auto
 ```
 
+**Continuous mode with verify stall guards (recommended):**
+
+```bash
+./scripts/task-loop.sh --auto --verify-idle-timeout 300 --verify-timeout 5400
+```
+
 **Stop at a checkpoint (e.g., after task 8 for review):**
 
 ```bash
@@ -264,13 +271,15 @@ For long-running projects, use the watchdog to keep the loop alive:
 **Foreground watchdog:**
 
 ```bash
-./scripts/task-loop-watchdog.sh --interval 20
+./scripts/task-loop-watchdog.sh --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300"
 ```
 
 **Background watchdog (unattended):**
 
 ```bash
-nohup ./scripts/task-loop-watchdog.sh --interval 20 \
+nohup ./scripts/task-loop-watchdog.sh --interval 300 \
+  --loop-arg "--verify-idle-timeout" --loop-arg "300" \
+  --loop-arg "--verify-timeout" --loop-arg "5400" \
   > .taskmaster/task-loop-watchdog.out 2>&1 &
 ```
 
@@ -295,8 +304,14 @@ pgrep -af "task-loop.sh|task-loop-watchdog.sh|codex exec"
 # Check current task state
 cat .taskmaster/task-loop-state.json
 
+# State-file age (seconds)
+now="$(date +%s)"; mtime="$(stat -f %m .taskmaster/task-loop-state.json 2>/dev/null || stat -c %Y .taskmaster/task-loop-state.json 2>/dev/null || echo 0)"; echo $((now-mtime))
+
 # View recent watchdog logs
 tail -n 120 .taskmaster/task-loop-watchdog.out
+
+# Verify/test process tree (stuck detection)
+pgrep -af "npm run verify|turbo run test|tsx --test"
 
 # Check overall progress
 task-master list --format json | jq '{
@@ -312,6 +327,7 @@ git log --oneline -10
 
 ### When to Intervene
 
+- **Verify phase stuck/no output for >5 minutes** — Restart with `--verify-idle-timeout 300`
 - **Task stuck for >10 minutes** — Check logs, may need manual fix
 - **Verify fails repeatedly** — Review the task requirements or fix test issues
 - **Dependency install failures** — May need `--codex-danger-full-access`
@@ -334,6 +350,8 @@ After each completed task, report:
 |--------|-------------|---------|
 | `--model` | Codex model to use | `gpt-5.3-codex` |
 | `--verify-cmd` | Verification command | `npm run verify` |
+| `--verify-timeout <sec>` | Max total verify runtime before fail | `1800` |
+| `--verify-idle-timeout <sec>` | Max seconds with no verify output before fail | `300` |
 | `--codex-sandbox` | Sandbox mode: `read-only`, `workspace-write`, `danger-full-access` | `workspace-write` |
 | `--auto` | Run continuously until all tasks complete | Off |
 | `--stop-after-task <id>` | Stop after completing specific task | None |
@@ -370,7 +388,7 @@ pnpm install
 
 **Solution:** Use the watchdog instead:
 ```bash
-./scripts/task-loop-watchdog.sh --interval 20
+./scripts/task-loop-watchdog.sh --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300"
 ```
 
 ### 3. Verify Command Fails
@@ -416,6 +434,7 @@ TaskMaster-generated tasks should be:
 ### 2. Maintain Strong Verify Scripts
 
 Your `npm run verify` command should:
+- Call `npm run validate`
 - Run unit tests
 - Run integration tests (if fast)
 - Lint code
@@ -456,7 +475,9 @@ When running watchdog in background:
 
 ```bash
 # Start
-nohup ./scripts/task-loop-watchdog.sh --interval 20 \
+nohup ./scripts/task-loop-watchdog.sh --interval 300 \
+  --loop-arg "--verify-idle-timeout" --loop-arg "300" \
+  --loop-arg "--verify-timeout" --loop-arg "5400" \
   > .taskmaster/watchdog.log 2>&1 &
 echo $! > .taskmaster/watchdog.pid
 

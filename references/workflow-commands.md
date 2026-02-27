@@ -43,6 +43,12 @@ Continuous mode:
 ./scripts/task-loop.sh --auto
 ```
 
+Continuous mode with explicit verify guards (recommended for unattended runs):
+
+```bash
+./scripts/task-loop.sh --auto --verify-idle-timeout 300 --verify-timeout 5400
+```
+
 Stop at checkpoint:
 
 ```bash
@@ -66,19 +72,19 @@ Graceful stop request:
 Foreground watchdog:
 
 ```bash
-./scripts/task-loop-watchdog.sh --interval 20
+./scripts/task-loop-watchdog.sh --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300"
 ```
 
 Daemonized watchdog:
 
 ```bash
-./scripts/task-loop-watchdog.sh --daemon --interval 20
+./scripts/task-loop-watchdog.sh --daemon --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300" --loop-arg "--verify-timeout" --loop-arg "5400"
 ```
 
 Legacy background pattern:
 
 ```bash
-nohup ./scripts/task-loop-watchdog.sh --interval 20 > .taskmaster/task-loop-watchdog.out 2>&1 < /dev/null &
+nohup ./scripts/task-loop-watchdog.sh --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300" --loop-arg "--verify-timeout" --loop-arg "5400" > .taskmaster/task-loop-watchdog.out 2>&1 < /dev/null &
 ```
 
 Watchdog status:
@@ -92,4 +98,3 @@ Watchdog graceful stop request:
 ```bash
 ./scripts/task-loop-watchdog.sh --request-stop
 ```
-

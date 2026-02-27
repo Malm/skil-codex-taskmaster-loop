@@ -11,6 +11,7 @@ Assume these are true unless user context says otherwise:
 - `task-master`, `jq`, `git`, and `node` are installed.
 - `task-master` is configured for the target repo (`.taskmaster/config.json`, provider/API keys as needed for `--research`).
 - Work is happening inside a git repository.
+- The repo has stable verification scripts (`validate` + `verify`).
 
 ## Install Scripts Into Target Repo
 
@@ -42,3 +43,24 @@ codex --help >/dev/null
 Default verify gate is `npm run verify`.
 Use a stable repo-level verify script (for example test + lint) before unattended runs.
 
+Recommended package scripts:
+
+```json
+{
+  "scripts": {
+    "validate": "npm run lint && npm run test && npm run build",
+    "verify": "npm run validate"
+  }
+}
+```
+
+If build is not required per task in your repo, keep at least:
+
+```json
+{
+  "scripts": {
+    "validate": "npm run lint && npm run test",
+    "verify": "npm run validate"
+  }
+}
+```

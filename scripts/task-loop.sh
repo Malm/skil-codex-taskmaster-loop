@@ -3,6 +3,8 @@ set -euo pipefail
 
 MODEL="gpt-5.3-codex"
 VERIFY_CMD="npm run verify"
+VERIFY_TIMEOUT_SECONDS="${VERIFY_TIMEOUT_SECONDS:-1800}"
+VERIFY_IDLE_TIMEOUT_SECONDS="${VERIFY_IDLE_TIMEOUT_SECONDS:-300}"
 CODEX_SANDBOX="workspace-write"
 TASK_ID=""
 AUTO_MODE=0
@@ -43,6 +45,9 @@ Options:
   --codex-danger-full-access
                          Shortcut for --codex-sandbox danger-full-access
   --verify-cmd <cmd>     Verify command to run before commit (default: npm run verify)
+  --verify-timeout <sec> Max total seconds for verify command (default: 1800)
+  --verify-idle-timeout <sec>
+                         Max seconds with no verify output before failing (default: 300)
   --auto                 Keep processing next available tasks until exhausted
   --allow-dirty          Allow running with a dirty git working tree
   --request-stop         Request graceful stop for a running --auto loop
@@ -82,6 +87,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verify-cmd)
       VERIFY_CMD="${2:-}"
+      shift 2
+      ;;
+    --verify-timeout)
+      VERIFY_TIMEOUT_SECONDS="${2:-}"
+      shift 2
+      ;;
+    --verify-idle-timeout)
+      VERIFY_IDLE_TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
     --auto)
@@ -133,6 +146,13 @@ case "$CODEX_SANDBOX" in
     exit 1
     ;;
 esac
+
+for n in "$VERIFY_TIMEOUT_SECONDS" "$VERIFY_IDLE_TIMEOUT_SECONDS"; do
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "Verify timeout values must be non-negative integers." >&2
+    exit 1
+  fi
+done
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -326,12 +346,81 @@ PROMPT
     - <"$prompt_file"
 }
 
+terminate_process_tree() {
+  local root_pid="$1"
+  local sig="${2:-TERM}"
+  local child
+  local children
+
+  children="$(pgrep -P "$root_pid" 2>/dev/null || true)"
+  for child in $children; do
+    terminate_process_tree "$child" "$sig"
+  done
+
+  kill "-$sig" "$root_pid" >/dev/null 2>&1 || true
+}
+
 run_phase_verifying() {
   local id="$1"
   write_state "$id" "verifying"
 
+  local conflict_pattern
+  conflict_pattern="pnpm --filter @ig-takeover/worker dev|tsx watch src/index\\.ts|scripts/local-dev\\.sh"
+  if pgrep -f "$conflict_pattern" >/dev/null 2>&1; then
+    echo "Detected running local worker/dev processes that can interfere with integration tests." >&2
+    echo "Stop local dev processes and rerun task-loop verify to avoid nondeterministic failures." >&2
+    return 2
+  fi
+
+  local verify_log="$TMP_DIR/verify-${id//\//-}.log"
+  : >"$verify_log"
+
+  local mtime_cmd=(stat -f %m)
+  if ! "${mtime_cmd[@]}" "$verify_log" >/dev/null 2>&1; then
+    mtime_cmd=(stat -c %Y)
+  fi
+
   echo "==> Verifying task $id with: $VERIFY_CMD"
-  if ! bash -lc "$VERIFY_CMD"; then
+  echo "==> Verify guards: timeout=${VERIFY_TIMEOUT_SECONDS}s idle_timeout=${VERIFY_IDLE_TIMEOUT_SECONDS}s"
+
+  bash -lc "$VERIFY_CMD" > >(tee "$verify_log") 2>&1 &
+  local verify_pid=$!
+  local verify_start_ts
+  verify_start_ts="$(date +%s)"
+  local verify_last_output_ts="$verify_start_ts"
+
+  while kill -0 "$verify_pid" >/dev/null 2>&1; do
+    sleep 5
+    local now_ts
+    now_ts="$(date +%s)"
+    local file_mtime
+    file_mtime="$("${mtime_cmd[@]}" "$verify_log" 2>/dev/null || echo "$verify_last_output_ts")"
+    if [[ "$file_mtime" =~ ^[0-9]+$ ]] && [[ "$file_mtime" -gt "$verify_last_output_ts" ]]; then
+      verify_last_output_ts="$file_mtime"
+    fi
+
+    if [[ "$VERIFY_TIMEOUT_SECONDS" -gt 0 ]] && (( now_ts - verify_start_ts >= VERIFY_TIMEOUT_SECONDS )); then
+      echo "Verification exceeded timeout (${VERIFY_TIMEOUT_SECONDS}s). Terminating verify process..." >&2
+      terminate_process_tree "$verify_pid" TERM
+      sleep 2
+      terminate_process_tree "$verify_pid" KILL
+      wait "$verify_pid" || true
+      echo "Verification failed for task $id due to timeout. Keeping status as in-progress." >&2
+      return 2
+    fi
+
+    if [[ "$VERIFY_IDLE_TIMEOUT_SECONDS" -gt 0 ]] && (( now_ts - verify_last_output_ts >= VERIFY_IDLE_TIMEOUT_SECONDS )); then
+      echo "Verification produced no output for ${VERIFY_IDLE_TIMEOUT_SECONDS}s. Terminating verify process..." >&2
+      terminate_process_tree "$verify_pid" TERM
+      sleep 2
+      terminate_process_tree "$verify_pid" KILL
+      wait "$verify_pid" || true
+      echo "Verification failed for task $id due to idle timeout. Keeping status as in-progress." >&2
+      return 2
+    fi
+  done
+
+  if ! wait "$verify_pid"; then
     echo "Verification failed for task $id. Keeping status as in-progress." >&2
     return 2
   fi

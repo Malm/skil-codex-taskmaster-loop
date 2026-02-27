@@ -70,3 +70,34 @@ Use this file when loop behavior deviates from expected operation.
 pgrep -af "task-loop.sh|task-loop-watchdog.sh|codex exec" || echo "no loop/watchdog processes"
 ```
 
+## 12) Verify phase stalls or appears hung
+
+- Symptom: state remains `verifying` with no fresh output for several minutes.
+- Fix: Run loop with verify guards and restart cleanly:
+
+```bash
+./scripts/task-loop.sh --request-stop || true
+./scripts/task-loop.sh --auto --verify-idle-timeout 300 --verify-timeout 5400
+```
+
+- Preventive: keep idle timeout enabled (`--verify-idle-timeout 300`) for unattended execution.
+
+## 13) Watchdog exits immediately after restart
+
+- Symptom: watchdog starts then exits without supervising loop.
+- Cause: stale stop marker from a previous `--request-stop`.
+- Fix:
+
+```bash
+./scripts/task-loop-watchdog.sh --request-stop
+./scripts/task-loop-watchdog.sh --daemon --interval 300 --loop-arg "--verify-idle-timeout" --loop-arg "300"
+```
+
+- Preventive: always check `--status` after daemon start.
+
+## 14) `watchdog.status: stale pid file`
+
+- Symptom: `task-loop-watchdog.sh --status` reports stale pid file.
+- Cause: watchdog process exited but pid file remained.
+- Fix: start watchdog again and confirm active loop/watchdog pids.
+- Preventive: verify with both `--status` and `pgrep -af "task-loop.sh|task-loop-watchdog.sh"`.
