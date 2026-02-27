@@ -70,6 +70,22 @@ Then run commands from the target repo root.
 ./scripts/bootstrap-taskmaster.sh --input .taskmaster/docs/prd.md --tag mvp --num-tasks 35
 ```
 
+Research mode policy for TaskMaster:
+- Default behavior in `bootstrap-taskmaster.sh` is research enabled (`--research`).
+- Use research for first parse of a new PRD, large PRDs, architecture-heavy scopes, or ambiguous requirements.
+- Keep research enabled for initial `parse-prd`, `analyze-complexity`, and `expand --all` on net-new projects.
+- Disable research (`--no-research`) for small incremental updates to an existing, already-expanded task set where speed/cost matters more than discovery.
+
+Examples:
+
+```bash
+# Default (research ON)
+./scripts/bootstrap-taskmaster.sh --input .taskmaster/docs/prd.md --tag mvp --num-tasks 35
+
+# Incremental refinement (research OFF)
+./scripts/bootstrap-taskmaster.sh --input .taskmaster/docs/prd.md --tag mvp --num-tasks 12 --no-research
+```
+
 3. Implement tasks with Codex loop.
 
 Single next task:

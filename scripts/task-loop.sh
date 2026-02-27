@@ -17,6 +17,14 @@ CURRENT_TASK_RUNNING=0
 RESUME_TASK_ID=""
 COMMIT_EXCLUDES=(
   ":(exclude).taskmaster/task-loop-state.json"
+  ":(exclude).taskmaster/task-loop.pid"
+  ":(exclude).taskmaster/task-loop.out"
+  ":(exclude).taskmaster/task-loop.ttylog"
+  ":(exclude).taskmaster/task-loop-watchdog.pid"
+  ":(exclude).taskmaster/task-loop-watchdog.out"
+  ":(exclude).taskmaster/task-loop-watchdog.stop"
+  ":(exclude).taskmaster/task-loop.stop"
+  ":(glob,exclude).taskmaster/task-loop.stop*"
   ":(exclude).taskmaster/tasks/tasks.json"
   ":(exclude).turbo"
 )
@@ -300,6 +308,7 @@ Rules:
 - Do not commit; the outer loop handles commit/status updates.
 - Start coding quickly: avoid broad repository scans unless strictly required.
 - Treat changes in \`.taskmaster/tasks/tasks.json\`, \`.taskmaster/task-loop-state.json\`, and \`.turbo/\` as loop bookkeeping/cache. Ignore them unless this task explicitly targets those files.
+- Never run global process-kill commands (for example \`killall\`/\`pkill\` on generic names such as \`node\`, \`npm\`, \`pnpm\`, \`python\`). If a command hangs, terminate only the exact child PID you launched.
 - If you need assumptions, make reasonable defaults and proceed.
 
 Task payload (JSON):
@@ -369,44 +378,154 @@ run_phase_mark_done() {
 
 run_task_fresh() {
   local id="$1"
+  local rc=0
   CURRENT_TASK_RUNNING=1
-  run_phase_running_codex "$id"
-  run_phase_verifying "$id"
-  run_phase_committing "$id" 1
-  run_phase_mark_done "$id"
+  if run_phase_running_codex "$id"; then
+    :
+  else
+    rc=$?
+    CURRENT_TASK_RUNNING=0
+    return "$rc"
+  fi
+  if run_phase_verifying "$id"; then
+    :
+  else
+    rc=$?
+    CURRENT_TASK_RUNNING=0
+    return "$rc"
+  fi
+  if run_phase_committing "$id" 1; then
+    :
+  else
+    rc=$?
+    CURRENT_TASK_RUNNING=0
+    return "$rc"
+  fi
+  if run_phase_mark_done "$id"; then
+    :
+  else
+    rc=$?
+    CURRENT_TASK_RUNNING=0
+    return "$rc"
+  fi
   CURRENT_TASK_RUNNING=0
 }
 
 resume_task_from_phase() {
   local id="$1"
   local phase="$2"
+  local rc=0
   CURRENT_TASK_RUNNING=1
   echo "==> Resuming task $id from phase: $phase"
   case "$phase" in
     running_codex|set_in_progress|fresh|"")
-      run_phase_running_codex "$id"
-      run_phase_verifying "$id"
-      run_phase_committing "$id" 1
-      run_phase_mark_done "$id"
+      if run_phase_running_codex "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_verifying "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_committing "$id" 1; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_mark_done "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
       ;;
     verifying)
-      run_phase_verifying "$id"
-      run_phase_committing "$id" 1
-      run_phase_mark_done "$id"
+      if run_phase_verifying "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_committing "$id" 1; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_mark_done "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
       ;;
     committing)
-      run_phase_committing "$id" 0
-      run_phase_mark_done "$id"
+      if run_phase_committing "$id" 0; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_mark_done "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
       ;;
     marking_done)
-      run_phase_mark_done "$id"
+      if run_phase_mark_done "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
       ;;
     *)
       echo "Unknown resume phase '$phase'. Starting task $id from codex phase."
-      run_phase_running_codex "$id"
-      run_phase_verifying "$id"
-      run_phase_committing "$id" 1
-      run_phase_mark_done "$id"
+      if run_phase_running_codex "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_verifying "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_committing "$id" 1; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
+      if run_phase_mark_done "$id"; then
+        :
+      else
+        rc=$?
+        CURRENT_TASK_RUNNING=0
+        return "$rc"
+      fi
       ;;
   esac
   CURRENT_TASK_RUNNING=0
@@ -433,8 +552,12 @@ maybe_resume_unfinished_task() {
   fi
 
   RESUME_TASK_ID="$resume_task_id"
-  resume_task_from_phase "$resume_task_id" "$resume_phase"
-  return 0
+  if resume_task_from_phase "$resume_task_id" "$resume_phase"; then
+    return 0
+  else
+    local resume_phase_rc=$?
+    return "$resume_phase_rc"
+  fi
 }
 
 run_task() {
@@ -448,7 +571,14 @@ if [[ -n "$TASK_ID" ]]; then
 fi
 
 RESUMED=0
+resume_rc=1
 if maybe_resume_unfinished_task; then
+  resume_rc=0
+else
+  resume_rc=$?
+fi
+
+if [[ "$resume_rc" -eq 0 ]]; then
   RESUMED=1
   if stop_requested; then
     rm -f "$STOP_FILE"
@@ -463,6 +593,9 @@ if maybe_resume_unfinished_task; then
     echo "Stop-after-task target reached at task $RESUME_TASK_ID. Exiting."
     exit 0
   fi
+elif [[ "$resume_rc" -ne 1 ]]; then
+  echo "Failed to resume unfinished task from state file (rc=$resume_rc)." >&2
+  exit "$resume_rc"
 fi
 
 if [[ "$AUTO_MODE" -eq 1 ]]; then
@@ -485,7 +618,17 @@ if [[ "$AUTO_MODE" -eq 1 ]]; then
       fi
     fi
 
-    run_task "$id"
+    if run_task "$id"; then
+      :
+    else
+      rc=$?
+      phase="<unknown>"
+      if [[ -f "$STATE_FILE" ]]; then
+        phase="$(jq -r '.phase // "<unknown>"' "$STATE_FILE" 2>/dev/null || echo "<unknown>")"
+      fi
+      echo "Task $id failed at phase $phase (rc=$rc)." >&2
+      exit "$rc"
+    fi
 
     if reached_stop_after_task "$id"; then
       echo "Reached stop-after-task target ($STOP_AFTER_TASK) after completing task $id. Exiting."
@@ -504,5 +647,15 @@ else
     echo "No available tasks."
     exit 0
   fi
-  run_task "$id"
+  if run_task "$id"; then
+    :
+  else
+    rc=$?
+    phase="<unknown>"
+    if [[ -f "$STATE_FILE" ]]; then
+      phase="$(jq -r '.phase // "<unknown>"' "$STATE_FILE" 2>/dev/null || echo "<unknown>")"
+    fi
+    echo "Task $id failed at phase $phase (rc=$rc)." >&2
+    exit "$rc"
+  fi
 fi
